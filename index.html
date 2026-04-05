@@ -49,7 +49,8 @@
       return map[origin][maneuver];
     }
 
-    function MiniDiagram({ egoM, otherM, otherDir, isConflict }) {
+    // yieldMode: "none" | "ego" | "other"
+    function MiniDiagram({ egoM, otherM, otherDir, status, yieldMode }) {
       const s = 120;
       const mid = s / 2;
       const roadW = 28;
@@ -67,14 +68,12 @@
         East:  { x: boxRight, y: mid - q },
         West:  { x: boxLeft,  y: mid + q },
       };
-
       const exitPts = {
         North: { x: mid + q, y: boxTop },
         South: { x: mid - q, y: boxBot },
         East:  { x: boxRight, y: mid + q },
         West:  { x: boxLeft,  y: mid - q },
       };
-
       const tailStart = {
         South: { x: mid + q, y: s - 2 },
         North: { x: mid - q, y: 2 },
@@ -88,7 +87,42 @@
         West:  { x: 2,       y: mid - q },
       };
 
-      function buildPath(origin, maneuver) {
+      const approachDirMap = {
+        South: { dx: 0, dy: -1 },
+        North: { dx: 0, dy: 1 },
+        East:  { dx: -1, dy: 0 },
+        West:  { dx: 1, dy: 0 },
+      };
+      const exitDirMap = {
+        North: { dx: 0, dy: -1 },
+        South: { dx: 0, dy: 1 },
+        East:  { dx: 1, dy: 0 },
+        West:  { dx: -1, dy: 0 },
+      };
+
+      // Stop line position: a few pixels before the intersection box entry,
+      // perpendicular to approach direction
+      const stopLineOffset = 4;
+
+      function getStopLine(origin) {
+        const entry = entryPts[origin];
+        const aDir = approachDirMap[origin];
+        // Stop line center is offset back from entry along approach direction
+        const cx = entry.x - aDir.dx * stopLineOffset;
+        const cy = entry.y - aDir.dy * stopLineOffset;
+        // Perpendicular direction for the line width
+        const perpX = Math.abs(aDir.dy);
+        const perpY = Math.abs(aDir.dx);
+        const lineHalf = q + 1;
+        return {
+          x1: cx - perpX * lineHalf, y1: cy - perpY * lineHalf,
+          x2: cx + perpX * lineHalf, y2: cy + perpY * lineHalf,
+          // The stop point on the trajectory (where solid becomes dashed)
+          stopPt: { x: cx, y: cy },
+        };
+      }
+
+      function buildFullPath(origin, maneuver) {
         const dest = getDestDir(origin, maneuver);
         const start = entryPts[origin];
         const end = exitPts[dest];
@@ -103,22 +137,8 @@
         }
 
         const reach = maneuver === "R" ? half * 0.9 : half * 1.4;
-
-        const approachDir = {
-          South: { dx: 0, dy: -1 },
-          North: { dx: 0, dy: 1 },
-          East:  { dx: -1, dy: 0 },
-          West:  { dx: 1, dy: 0 },
-        };
-        const exitDir = {
-          North: { dx: 0, dy: -1 },
-          South: { dx: 0, dy: 1 },
-          East:  { dx: 1, dy: 0 },
-          West:  { dx: -1, dy: 0 },
-        };
-
-        const aDir = approachDir[origin];
-        const eDir = exitDir[dest];
+        const aDir = approachDirMap[origin];
+        const eDir = exitDirMap[dest];
         const cp1x = start.x + aDir.dx * reach;
         const cp1y = start.y + aDir.dy * reach;
         const cp2x = end.x - eDir.dx * reach;
@@ -127,11 +147,87 @@
         return `${approachTail} C${cp1x},${cp1y} ${cp2x},${cp2y} ${end.x},${end.y} ${exitTail}`;
       }
 
-      const egoPath = buildPath("South", egoM);
-      const otherPath = buildPath(otherDir, otherM);
+      // Split path: solid part (tail start -> stop point) and dashed part (stop point -> full trajectory)
+      function buildSplitPaths(origin, maneuver) {
+        const sl = getStopLine(origin);
+        const tStart = tailStart[origin];
+        const solidPath = `M${tStart.x},${tStart.y} L${sl.stopPt.x},${sl.stopPt.y}`;
+
+        const dest = getDestDir(origin, maneuver);
+        const start = entryPts[origin];
+        const end = exitPts[dest];
+        const tEnd = tailEnd[dest];
+
+        let dashedPath;
+        if (maneuver === "S") {
+          dashedPath = `M${sl.stopPt.x},${sl.stopPt.y} L${start.x},${start.y} L${end.x},${end.y} L${tEnd.x},${tEnd.y}`;
+        } else {
+          const reach = maneuver === "R" ? half * 0.9 : half * 1.4;
+          const aDir = approachDirMap[origin];
+          const eDir = exitDirMap[dest];
+          const cp1x = start.x + aDir.dx * reach;
+          const cp1y = start.y + aDir.dy * reach;
+          const cp2x = end.x - eDir.dx * reach;
+          const cp2y = end.y - eDir.dy * reach;
+          dashedPath = `M${sl.stopPt.x},${sl.stopPt.y} L${start.x},${start.y} C${cp1x},${cp1y} ${cp2x},${cp2y} ${end.x},${end.y} L${tEnd.x},${tEnd.y}`;
+        }
+
+        return { solidPath, dashedPath, stopLine: sl };
+      }
+
+      const isConflict = status === "conflict" || status === "maybe";
+      const showYield = isConflict && yieldMode !== "none";
+      const egoYields = yieldMode === "ego";
+
       const egoColor = "#60a5fa";
-      const otherColor = isConflict === "conflict" ? "#f87171" : isConflict === "maybe" ? "#fbbf24" : "#4ade80";
-      const bgColor = isConflict === "conflict" ? "#18080c" : isConflict === "maybe" ? "#18140a" : "#081810";
+      const otherColor = status === "conflict" ? "#f87171" : status === "maybe" ? "#fbbf24" : "#4ade80";
+      const bgColor = status === "conflict" ? "#18080c" : status === "maybe" ? "#18140a" : "#081810";
+      const stopLineColor = "#ffffff";
+
+      // Build paths
+      let egoElements, otherElements;
+
+      if (showYield && egoYields) {
+        // Ego yields: solid approach to stop line, dashed after
+        const sp = buildSplitPaths("South", egoM);
+        egoElements = (
+          <>
+            <path d={sp.solidPath} fill="none" stroke={egoColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.85} />
+            <path d={sp.dashedPath} fill="none" stroke={egoColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.4} strokeDasharray="4,3" />
+            <line x1={sp.stopLine.x1} y1={sp.stopLine.y1} x2={sp.stopLine.x2} y2={sp.stopLine.y2}
+                  stroke={stopLineColor} strokeWidth={2} strokeLinecap="round" opacity={0.9} />
+          </>
+        );
+        const otherFull = buildFullPath(otherDir, otherM);
+        otherElements = (
+          <path d={otherFull} fill="none" stroke={otherColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.75} />
+        );
+      } else if (showYield && !egoYields) {
+        // Other yields: solid approach to stop line, dashed after
+        const sp = buildSplitPaths(otherDir, otherM);
+        otherElements = (
+          <>
+            <path d={sp.solidPath} fill="none" stroke={otherColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.75} />
+            <path d={sp.dashedPath} fill="none" stroke={otherColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.35} strokeDasharray="4,3" />
+            <line x1={sp.stopLine.x1} y1={sp.stopLine.y1} x2={sp.stopLine.x2} y2={sp.stopLine.y2}
+                  stroke={stopLineColor} strokeWidth={2} strokeLinecap="round" opacity={0.9} />
+          </>
+        );
+        const egoFull = buildFullPath("South", egoM);
+        egoElements = (
+          <path d={egoFull} fill="none" stroke={egoColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.85} />
+        );
+      } else {
+        // No yield or safe: draw both full
+        const egoFull = buildFullPath("South", egoM);
+        const otherFull = buildFullPath(otherDir, otherM);
+        otherElements = (
+          <path d={otherFull} fill="none" stroke={otherColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.75} />
+        );
+        egoElements = (
+          <path d={egoFull} fill="none" stroke={egoColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.85} />
+        );
+      }
 
       return (
         <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} style={{ borderRadius: 6 }}>
@@ -146,12 +242,12 @@
           <text x={mid} y={s - 5} textAnchor="middle" fill="#64748b" fontSize={7} fontFamily="monospace" fontWeight="bold">S</text>
           <text x={7} y={mid + 3} textAnchor="middle" fill="#475569" fontSize={7} fontFamily="monospace">W</text>
           <text x={s - 7} y={mid + 3} textAnchor="middle" fill="#475569" fontSize={7} fontFamily="monospace">E</text>
-          <path d={otherPath} fill="none" stroke={otherColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.75} />
-          <path d={egoPath} fill="none" stroke={egoColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.85} />
+          {otherElements}
+          {egoElements}
           <circle cx={tailStart["South"].x} cy={tailStart["South"].y} r={3.5} fill={egoColor} />
           <circle cx={tailStart[otherDir].x} cy={tailStart[otherDir].y} r={3.5} fill={otherColor} />
-          {isConflict === "conflict" && <text x={s - 12} y={13} fontSize={11} textAnchor="middle">⚠️</text>}
-          {isConflict === "maybe" && <text x={s - 12} y={13} fontSize={11} textAnchor="middle">❓</text>}
+          {status === "conflict" && <text x={s - 12} y={13} fontSize={11} textAnchor="middle">⚠️</text>}
+          {status === "maybe" && <text x={s - 12} y={13} fontSize={11} textAnchor="middle">❓</text>}
         </svg>
       );
     }
@@ -166,7 +262,6 @@
       const egoCells = new Set(cellMap["South"][egoM]);
       const otherCells = new Set(cellMap[otherDir][otherM]);
       const shared = [...egoCells].filter(c => otherCells.has(c));
-
       const exitLane = {
         South: { L: "W-near", S: "N-near", R: "E-near" },
         North: { L: "E-near", S: "S-near", R: "W-near" },
@@ -176,7 +271,6 @@
       const egoExit = exitLane["South"][egoM];
       const otherExit = exitLane[otherDir][otherM];
       const merge = egoExit === otherExit;
-
       const parts = [];
       if (shared.length > 0) parts.push(`cross ${shared.join(",")}`);
       if (merge) parts.push("merge");
@@ -190,6 +284,7 @@
     function App() {
       const [filter, setFilter] = useState("all");
       const [showReasons, setShowReasons] = useState(true);
+      const [yieldMode, setYieldMode] = useState("ego"); // "ego" | "other"
       const directions = ["West", "North", "East"];
       const allVals = Object.values(CONFLICT_MAP).flatMap(dir => Object.values(dir));
       const totalConflicts = allVals.filter(v => v === "conflict").length;
@@ -211,6 +306,8 @@
             <p style={{ color: "#94a3b8", fontSize: 14, margin: "4px 0", fontWeight: 600 }}>
               {totalConflicts} conflicts · {totalMaybe} maybe · {totalSafe} safe
             </p>
+
+            {/* Filter row */}
             <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
               {[
                 { key: "all", label: `All (27)` },
@@ -234,10 +331,27 @@
                 fontSize: 11, cursor: "pointer", fontFamily: "inherit", marginLeft: 8,
               }}>{showReasons ? "Hide" : "Show"} reasons</button>
             </div>
+
+            {/* Yield mode row */}
+            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: "#64748b", marginRight: 4 }}>Priority:</span>
+              {[
+                { key: "ego", label: "Ego yields" },
+                { key: "other", label: "Other yields" },
+              ].map(({ key, label }) => (
+                <button key={key} onClick={() => setYieldMode(key)} style={{
+                  padding: "5px 12px", borderRadius: 5, border: "1px solid",
+                  borderColor: yieldMode === key ? "#059669" : "#1e293b",
+                  background: yieldMode === key ? "#064e3b" : "#0f172a",
+                  color: yieldMode === key ? "#6ee7b7" : "#64748b",
+                  fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+                }}>{label}</button>
+              ))}
+            </div>
           </div>
 
           {/* Legend */}
-          <div style={{ maxWidth: 960, margin: "0 auto 16px", display: "flex", gap: 20, fontSize: 11 }}>
+          <div style={{ maxWidth: 960, margin: "0 auto 16px", display: "flex", gap: 16, fontSize: 11, flexWrap: "wrap" }}>
             {[
               { color: "#60a5fa", label: "Ego (from South)" },
               { color: "#4ade80", label: "Other (safe)" },
@@ -249,6 +363,10 @@
                 <span style={{ color: "#94a3b8" }}>{label}</span>
               </span>
             ))}
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 14, height: 2, background: "#fff", borderRadius: 1, display: "inline-block" }} />
+              <span style={{ color: "#94a3b8" }}>Stop line (yielding vehicle)</span>
+            </span>
           </div>
 
           {/* Grids */}
@@ -289,28 +407,38 @@
                     }}>Ego {MANEUVER_LABEL[egoM]}</div>
                     {MANEUVER.map((otherM) => {
                       const key = `${egoM}-${otherM}`;
-                      const status = CONFLICT_MAP[dir][key];
-                      const show = filter === "all" || filter === status;
+                      const cellStatus = CONFLICT_MAP[dir][key];
+                      const show = filter === "all" || filter === cellStatus;
                       const borderColors = { conflict: "#7f1d1d", maybe: "#854d0e", safe: "#14532d" };
                       const bgColors = { conflict: "#18080c", maybe: "#18140a", safe: "#081810" };
                       const labelColors = { conflict: "#fca5a5", maybe: "#fde68a", safe: "#86efac" };
                       const labels = { conflict: "CONFLICT", maybe: "MAYBE", safe: "SAFE" };
+
+                      let displayLabel = labels[cellStatus];
+                      if (cellStatus === "conflict" || cellStatus === "maybe") {
+                        displayLabel = yieldMode === "ego" ? "EGO YIELDS" : "OTHER YIELDS";
+                      }
+
                       return (
                         <div key={key} style={{
                           display: "flex", flexDirection: "column", alignItems: "center",
                           padding: 6, borderRadius: 8,
-                          border: `1px solid ${show ? borderColors[status] : "#111"}`,
-                          background: show ? bgColors[status] : "#0a0a12",
+                          border: `1px solid ${show ? borderColors[cellStatus] : "#111"}`,
+                          background: show ? bgColors[cellStatus] : "#0a0a12",
                           opacity: show ? 1 : 0.12, transition: "opacity 0.2s",
                         }}>
-                          <MiniDiagram egoM={egoM} otherM={otherM} otherDir={dir} isConflict={status} />
+                          <MiniDiagram
+                            egoM={egoM} otherM={otherM} otherDir={dir}
+                            status={cellStatus}
+                            yieldMode={cellStatus === "safe" ? "none" : yieldMode}
+                          />
                           <div style={{
                             marginTop: 3, fontSize: 10, fontWeight: 700,
-                            color: labelColors[status], letterSpacing: "0.06em",
+                            color: labelColors[cellStatus], letterSpacing: "0.06em",
                           }}>
-                            {labels[status]}
+                            {displayLabel}
                           </div>
-                          {showReasons && status !== "safe" && (
+                          {showReasons && cellStatus !== "safe" && (
                             <ConflictReason egoM={egoM} otherM={otherM} otherDir={dir} />
                           )}
                         </div>
@@ -350,7 +478,7 @@
               })}
             </div>
             <div style={{ marginTop: 12, textAlign: "center", fontSize: 10, color: "#64748b" }}>
-              Maybe = depends on intersection geometry and driving convention (e.g. opposing left turns, tight right-vs-left)
+              {`Showing: ${yieldMode === "ego" ? "Ego" : "Other vehicle"} yields at stop line · Dashed = continues after yielding`}
             </div>
           </div>
         </div>
