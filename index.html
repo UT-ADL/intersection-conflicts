@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Intersection Conflict Matrix</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a12; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState } = React;
+
+    const CONFLICT_MAP = {
+      North: {
+        "L-L": "maybe",    "L-S": "conflict", "L-R": "conflict",
+        "S-L": "conflict", "S-S": "safe",     "S-R": "safe",
+        "R-L": "conflict", "R-S": "safe",     "R-R": "safe",
+      },
+      East: {
+        "L-L": "conflict", "L-S": "conflict", "L-R": "maybe",
+        "S-L": "conflict", "S-S": "conflict", "S-R": "conflict",
+        "R-L": "safe",     "R-S": "safe",     "R-R": "safe",
+      },
+      West: {
+        "L-L": "conflict", "L-S": "conflict", "L-R": "safe",
+        "S-L": "conflict", "S-S": "conflict", "S-R": "safe",
+        "R-L": "maybe",    "R-S": "conflict", "R-R": "safe",
+      },
+    };
+
+    const DIR_LABELS = { North: "Opposite", East: "From Right", West: "From Left" };
+    const MANEUVER = ["L", "S", "R"];
+    const MANEUVER_LABEL = { L: "Left", S: "Straight", R: "Right" };
+
+    function getDestDir(origin, maneuver) {
+      const map = {
+        South: { L: "West",  S: "North", R: "East" },
+        North: { L: "East",  S: "South", R: "West" },
+        East:  { L: "South", S: "West",  R: "North" },
+        West:  { L: "North", S: "East",  R: "South" },
+      };
+      return map[origin][maneuver];
+    }
+
+    function MiniDiagram({ egoM, otherM, otherDir, isConflict }) {
+      const s = 120;
+      const mid = s / 2;
+      const roadW = 28;
+      const half = roadW / 2;
+      const q = roadW / 4;
+
+      const boxTop = mid - half;
+      const boxBot = mid + half;
+      const boxLeft = mid - half;
+      const boxRight = mid + half;
+
+      const entryPts = {
+        South: { x: mid + q, y: boxBot },
+        North: { x: mid - q, y: boxTop },
+        East:  { x: boxRight, y: mid - q },
+        West:  { x: boxLeft,  y: mid + q },
+      };
+
+      const exitPts = {
+        North: { x: mid + q, y: boxTop },
+        South: { x: mid - q, y: boxBot },
+        East:  { x: boxRight, y: mid + q },
+        West:  { x: boxLeft,  y: mid - q },
+      };
+
+      const tailStart = {
+        South: { x: mid + q, y: s - 2 },
+        North: { x: mid - q, y: 2 },
+        East:  { x: s - 2,   y: mid - q },
+        West:  { x: 2,       y: mid + q },
+      };
+      const tailEnd = {
+        North: { x: mid + q, y: 2 },
+        South: { x: mid - q, y: s - 2 },
+        East:  { x: s - 2,   y: mid + q },
+        West:  { x: 2,       y: mid - q },
+      };
+
+      function buildPath(origin, maneuver) {
+        const dest = getDestDir(origin, maneuver);
+        const start = entryPts[origin];
+        const end = exitPts[dest];
+        const tStart = tailStart[origin];
+        const tEnd = tailEnd[dest];
+
+        const approachTail = `M${tStart.x},${tStart.y} L${start.x},${start.y}`;
+        const exitTail = `L${tEnd.x},${tEnd.y}`;
+
+        if (maneuver === "S") {
+          return `${approachTail} L${end.x},${end.y} ${exitTail}`;
+        }
+
+        const reach = maneuver === "R" ? half * 0.9 : half * 1.4;
+
+        const approachDir = {
+          South: { dx: 0, dy: -1 },
+          North: { dx: 0, dy: 1 },
+          East:  { dx: -1, dy: 0 },
+          West:  { dx: 1, dy: 0 },
+        };
+        const exitDir = {
+          North: { dx: 0, dy: -1 },
+          South: { dx: 0, dy: 1 },
+          East:  { dx: 1, dy: 0 },
+          West:  { dx: -1, dy: 0 },
+        };
+
+        const aDir = approachDir[origin];
+        const eDir = exitDir[dest];
+        const cp1x = start.x + aDir.dx * reach;
+        const cp1y = start.y + aDir.dy * reach;
+        const cp2x = end.x - eDir.dx * reach;
+        const cp2y = end.y - eDir.dy * reach;
+
+        return `${approachTail} C${cp1x},${cp1y} ${cp2x},${cp2y} ${end.x},${end.y} ${exitTail}`;
+      }
+
+      const egoPath = buildPath("South", egoM);
+      const otherPath = buildPath(otherDir, otherM);
+      const egoColor = "#60a5fa";
+      const otherColor = isConflict === "conflict" ? "#f87171" : isConflict === "maybe" ? "#fbbf24" : "#4ade80";
+      const bgColor = isConflict === "conflict" ? "#18080c" : isConflict === "maybe" ? "#18140a" : "#081810";
+
+      return (
+        <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} style={{ borderRadius: 6 }}>
+          <rect width={s} height={s} fill={bgColor} rx={6} />
+          <rect x={mid - half} y={0} width={roadW} height={s} fill="#1a2332" />
+          <rect x={0} y={mid - half} width={s} height={roadW} fill="#1a2332" />
+          <line x1={mid} y1={0} x2={mid} y2={mid - half} stroke="#334155" strokeWidth={0.7} strokeDasharray="3,3" />
+          <line x1={mid} y1={mid + half} x2={mid} y2={s} stroke="#334155" strokeWidth={0.7} strokeDasharray="3,3" />
+          <line x1={0} y1={mid} x2={mid - half} y2={mid} stroke="#334155" strokeWidth={0.7} strokeDasharray="3,3" />
+          <line x1={mid + half} y1={mid} x2={s} y2={mid} stroke="#334155" strokeWidth={0.7} strokeDasharray="3,3" />
+          <text x={mid} y={11} textAnchor="middle" fill="#475569" fontSize={7} fontFamily="monospace">N</text>
+          <text x={mid} y={s - 5} textAnchor="middle" fill="#64748b" fontSize={7} fontFamily="monospace" fontWeight="bold">S</text>
+          <text x={7} y={mid + 3} textAnchor="middle" fill="#475569" fontSize={7} fontFamily="monospace">W</text>
+          <text x={s - 7} y={mid + 3} textAnchor="middle" fill="#475569" fontSize={7} fontFamily="monospace">E</text>
+          <path d={otherPath} fill="none" stroke={otherColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.75} />
+          <path d={egoPath} fill="none" stroke={egoColor} strokeWidth={2.5} strokeLinecap="round" opacity={0.85} />
+          <circle cx={tailStart["South"].x} cy={tailStart["South"].y} r={3.5} fill={egoColor} />
+          <circle cx={tailStart[otherDir].x} cy={tailStart[otherDir].y} r={3.5} fill={otherColor} />
+          {isConflict === "conflict" && <text x={s - 12} y={13} fontSize={11} textAnchor="middle">⚠️</text>}
+          {isConflict === "maybe" && <text x={s - 12} y={13} fontSize={11} textAnchor="middle">❓</text>}
+        </svg>
+      );
+    }
+
+    function ConflictReason({ egoM, otherM, otherDir }) {
+      const cellMap = {
+        South: { L: ["SE","SW"], S: ["SE","NE"], R: ["SE"] },
+        North: { L: ["NW","NE"], S: ["NW","SW"], R: ["NW"] },
+        East:  { L: ["NE","SE"], S: ["NE","NW"], R: ["NE"] },
+        West:  { L: ["SW","NW"], S: ["SW","SE"], R: ["SW"] },
+      };
+      const egoCells = new Set(cellMap["South"][egoM]);
+      const otherCells = new Set(cellMap[otherDir][otherM]);
+      const shared = [...egoCells].filter(c => otherCells.has(c));
+
+      const exitLane = {
+        South: { L: "W-near", S: "N-near", R: "E-near" },
+        North: { L: "E-near", S: "S-near", R: "W-near" },
+        East:  { L: "S-near", S: "W-near", R: "N-near" },
+        West:  { L: "N-near", S: "E-near", R: "S-near" },
+      };
+      const egoExit = exitLane["South"][egoM];
+      const otherExit = exitLane[otherDir][otherM];
+      const merge = egoExit === otherExit;
+
+      const parts = [];
+      if (shared.length > 0) parts.push(`cross ${shared.join(",")}`);
+      if (merge) parts.push("merge");
+      return (
+        <div style={{ fontSize: 8, color: "#78716c", marginTop: 2, lineHeight: 1.2 }}>
+          {parts.join(" + ")}
+        </div>
+      );
+    }
+
+    function App() {
+      const [filter, setFilter] = useState("all");
+      const [showReasons, setShowReasons] = useState(true);
+      const directions = ["West", "North", "East"];
+      const allVals = Object.values(CONFLICT_MAP).flatMap(dir => Object.values(dir));
+      const totalConflicts = allVals.filter(v => v === "conflict").length;
+      const totalMaybe = allVals.filter(v => v === "maybe").length;
+      const totalSafe = allVals.filter(v => v === "safe").length;
+
+      return (
+        <div style={{
+          background: "#0a0a12", minHeight: "100vh", color: "#e2e8f0",
+          fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace", padding: "24px 16px",
+        }}>
+          <div style={{ maxWidth: 960, margin: "0 auto", marginBottom: 24 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>
+              Intersection Conflict Matrix
+            </h1>
+            <p style={{ color: "#64748b", fontSize: 12, margin: "6px 0 0 0" }}>
+              Ego from South · Right-hand traffic · Based on actual drawn trajectory crossings
+            </p>
+            <p style={{ color: "#94a3b8", fontSize: 14, margin: "4px 0", fontWeight: 600 }}>
+              {totalConflicts} conflicts · {totalMaybe} maybe · {totalSafe} safe
+            </p>
+            <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+              {[
+                { key: "all", label: `All (27)` },
+                { key: "conflict", label: `Conflicts (${totalConflicts})` },
+                { key: "maybe", label: `Maybe (${totalMaybe})` },
+                { key: "safe", label: `Safe (${totalSafe})` },
+              ].map(({ key, label }) => (
+                <button key={key} onClick={() => setFilter(key)} style={{
+                  padding: "5px 12px", borderRadius: 5, border: "1px solid",
+                  borderColor: filter === key ? "#3b82f6" : "#1e293b",
+                  background: filter === key ? "#1e3a5f" : "#0f172a",
+                  color: filter === key ? "#93c5fd" : "#64748b",
+                  fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+                }}>{label}</button>
+              ))}
+              <button onClick={() => setShowReasons(!showReasons)} style={{
+                padding: "5px 12px", borderRadius: 5, border: "1px solid",
+                borderColor: showReasons ? "#854d0e" : "#1e293b",
+                background: showReasons ? "#422006" : "#0f172a",
+                color: showReasons ? "#fbbf24" : "#64748b",
+                fontSize: 11, cursor: "pointer", fontFamily: "inherit", marginLeft: 8,
+              }}>{showReasons ? "Hide" : "Show"} reasons</button>
+            </div>
+          </div>
+
+          {/* Legend */}
+          <div style={{ maxWidth: 960, margin: "0 auto 16px", display: "flex", gap: 20, fontSize: 11 }}>
+            {[
+              { color: "#60a5fa", label: "Ego (from South)" },
+              { color: "#4ade80", label: "Other (safe)" },
+              { color: "#fbbf24", label: "Other (maybe)" },
+              { color: "#f87171", label: "Other (conflict)" },
+            ].map(({ color, label }) => (
+              <span key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 14, height: 3, background: color, borderRadius: 2, display: "inline-block" }} />
+                <span style={{ color: "#94a3b8" }}>{label}</span>
+              </span>
+            ))}
+          </div>
+
+          {/* Grids */}
+          {directions.map((dir) => {
+            const vals = Object.values(CONFLICT_MAP[dir]);
+            const dirConflicts = vals.filter(v => v === "conflict").length;
+            const dirMaybe = vals.filter(v => v === "maybe").length;
+            return (
+              <div key={dir} style={{ maxWidth: 960, margin: "0 auto 28px" }}>
+                <div style={{
+                  display: "flex", alignItems: "baseline", gap: 10,
+                  marginBottom: 8, borderBottom: "1px solid #1e293b", paddingBottom: 6,
+                }}>
+                  <h2 style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", margin: 0 }}>
+                    Other from {dir}
+                  </h2>
+                  <span style={{ fontSize: 11, color: "#64748b" }}>
+                    {DIR_LABELS[dir]} · {dirConflicts} conflicts{dirMaybe > 0 ? ` · ${dirMaybe} maybe` : ""}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "80px repeat(3, 1fr)", gap: 6, marginBottom: 4 }}>
+                  <div style={{ fontSize: 9, color: "#475569", display: "flex", alignItems: "end", justifyContent: "center" }}>
+                    Ego↓ Other→
+                  </div>
+                  {MANEUVER.map((m) => (
+                    <div key={m} style={{ textAlign: "center", fontSize: 11, color: "#94a3b8" }}>
+                      Other {MANEUVER_LABEL[m]}
+                    </div>
+                  ))}
+                </div>
+                {MANEUVER.map((egoM) => (
+                  <div key={egoM} style={{
+                    display: "grid", gridTemplateColumns: "80px repeat(3, 1fr)", gap: 6, marginBottom: 6,
+                  }}>
+                    <div style={{
+                      display: "flex", alignItems: "center", justifyContent: "flex-end",
+                      fontSize: 11, color: "#94a3b8", paddingRight: 8,
+                    }}>Ego {MANEUVER_LABEL[egoM]}</div>
+                    {MANEUVER.map((otherM) => {
+                      const key = `${egoM}-${otherM}`;
+                      const status = CONFLICT_MAP[dir][key];
+                      const show = filter === "all" || filter === status;
+                      const borderColors = { conflict: "#7f1d1d", maybe: "#854d0e", safe: "#14532d" };
+                      const bgColors = { conflict: "#18080c", maybe: "#18140a", safe: "#081810" };
+                      const labelColors = { conflict: "#fca5a5", maybe: "#fde68a", safe: "#86efac" };
+                      const labels = { conflict: "CONFLICT", maybe: "MAYBE", safe: "SAFE" };
+                      return (
+                        <div key={key} style={{
+                          display: "flex", flexDirection: "column", alignItems: "center",
+                          padding: 6, borderRadius: 8,
+                          border: `1px solid ${show ? borderColors[status] : "#111"}`,
+                          background: show ? bgColors[status] : "#0a0a12",
+                          opacity: show ? 1 : 0.12, transition: "opacity 0.2s",
+                        }}>
+                          <MiniDiagram egoM={egoM} otherM={otherM} otherDir={dir} isConflict={status} />
+                          <div style={{
+                            marginTop: 3, fontSize: 10, fontWeight: 700,
+                            color: labelColors[status], letterSpacing: "0.06em",
+                          }}>
+                            {labels[status]}
+                          </div>
+                          {showReasons && status !== "safe" && (
+                            <ConflictReason egoM={egoM} otherM={otherM} otherDir={dir} />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+
+          {/* Summary */}
+          <div style={{
+            maxWidth: 960, margin: "0 auto", padding: 16,
+            background: "#0f172a", borderRadius: 8, border: "1px solid #1e293b",
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9", marginBottom: 10 }}>Summary</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+              {directions.map((dir) => {
+                const vals = Object.values(CONFLICT_MAP[dir]);
+                const c = vals.filter(v => v === "conflict").length;
+                const m = vals.filter(v => v === "maybe").length;
+                return (
+                  <div key={dir} style={{
+                    padding: "10px 12px", background: "#1e293b", borderRadius: 6, textAlign: "center",
+                  }}>
+                    <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4 }}>
+                      {DIR_LABELS[dir]} ({dir})
+                    </div>
+                    <div style={{ fontSize: 20, fontWeight: 700 }}>
+                      <span style={{ color: "#fca5a5" }}>{c}</span>
+                      {m > 0 && <span style={{ color: "#fde68a", fontSize: 14 }}> +{m}?</span>}
+                      <span style={{ fontSize: 12, color: "#64748b", fontWeight: 400 }}> /9</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 12, textAlign: "center", fontSize: 10, color: "#64748b" }}>
+              Maybe = depends on intersection geometry and driving convention (e.g. opposing left turns, tight right-vs-left)
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
